@@ -71,7 +71,9 @@ export default {
     { id: "text-embedding-3-large", name: "Text Embedding 3 Large (GitHub)", kind: "embedding" },
   ],
   serviceKinds: ["llm","embedding"],
-  embeddingConfig: { baseUrl: "https://models.github.ai/inference/embeddings", authType: "apikey", authHeader: "bearer" },
+  // models.github.ai was retired (#4792): embeddings endpoint moved to the
+  // Copilot API host that already serves chat completions above.
+  embeddingConfig: { baseUrl: "https://api.githubcopilot.com/embeddings", authType: "apikey", authHeader: "bearer" },
   oauth: {
     clientId: "Iv1.b507a08c87ecfe98",
     authorizeUrl: "https://github.com/login/oauth/authorize",
