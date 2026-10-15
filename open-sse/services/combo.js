@@ -303,11 +303,30 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
 
     try {
       const result = await handleSingleModel(body, modelStr);
-      
+
       // Success (2xx) - return response
       if (result.ok) {
-        log.info("COMBO", `Model ${modelStr} succeeded`);
-        return result;
+        // A 2xx with no usable content (empty message / in_progress stop) is a
+        // seat failure, not success — fall through to the next model (#4736).
+        // Only parse JSON bodies: .json() on an SSE stream would consume the
+        // whole stream and kill incremental streaming for the client.
+        const contentType = result.headers?.get?.("content-type") || "";
+        let emptyOk = false;
+        if (contentType.includes("application/json")) {
+          try {
+            const okBody = await result.clone().json();
+            emptyOk = isPanelEmptyResult(okBody);
+          } catch { /* opaque body — trust the 2xx */ }
+        }
+        if (!emptyOk) {
+          log.info("COMBO", `Model ${modelStr} succeeded`);
+          return result;
+        }
+        log.warn("COMBO", `Model ${modelStr} returned 2xx with no usable content, trying next`);
+        lastError = "empty response from upstream";
+        // Keep lastStatus null here: a 2xx must not leak into the final
+        // "all models failed" response as a success status.
+        continue;
       }
 
       // Extract error info from response
@@ -331,10 +350,14 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
         try { errorText = JSON.stringify(errorText); } catch { errorText = String(errorText); }
       }
 
-      // Check if should fallback to next model
-      const { shouldFallback, cooldownMs } = checkFallbackError(result.status, errorText);
+      // Check if should fallback to next model. advanceChain marks seat-scoped
+      // request errors (unsupported model id, rejected parameter, context
+      // overflow): the credential is healthy, but another member may accept the
+      // request — try the remaining seats and surface the LAST seat's error
+      // (status + message) when the chain exhausts (#4683 reproduction A).
+      const { shouldFallback, cooldownMs, advanceChain } = checkFallbackError(result.status, errorText);
 
-      if (!shouldFallback) {
+      if (!shouldFallback && !advanceChain) {
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
         return result;
       }
@@ -350,7 +373,9 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
 
       // Fallback to next model
       lastError = errorText || String(result.status);
-      if (!lastStatus) lastStatus = result.status;
+      // Surface the LAST seat's status, not the first's (#4683): the caller
+      // should see the status and message of the seat that failed last.
+      lastStatus = result.status;
       log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
     } catch (error) {
       // Catch unexpected exceptions to ensure fallback continues
@@ -419,6 +444,39 @@ function extractPanelText(json) {
   }
 
   return "";
+}
+
+/**
+ * Detect a 2xx response that carries no usable content: empty assistant message,
+ * no tool calls, and a non-terminal stop reason (e.g. translated `in_progress`/
+ * `incomplete` from free-tier upstreams, issues #4736 / #4683). Combos treat such
+ * responses as seat failures so fallback can try the next model.
+ */
+function isPanelEmptyResult(json) {
+  if (!json || typeof json !== "object") return true;
+  if (extractPanelText(json)) return false;
+
+  // OpenAI chat: tool calls / reasoning content count as usable output
+  const msg = json.choices?.[0]?.message;
+  if (msg) {
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return false;
+    if (typeof msg.reasoning_content === "string" && msg.reasoning_content.trim()) return false;
+  }
+
+  // Claude: any non-text block (tool_use, thinking) counts
+  if (Array.isArray(json.content)) {
+    const blocks = json.content.filter((b) => b && b.type !== "text" && b.text !== "");
+    if (blocks.length > 0) return false;
+  }
+
+  // Gemini: functionCall parts count
+  const parts = json.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts) && parts.some((p) => p?.functionCall)) return false;
+
+  // Terminal finish reasons mean the upstream genuinely produced nothing usable
+  // (e.g. content filter) — still empty for fallback purposes.
+  const finish = json.choices?.[0]?.finish_reason ?? json.stop_reason;
+  return !finish || finish === "in_progress" || finish === "incomplete" || finish === "null" || finish === null;
 }
 
 /**
