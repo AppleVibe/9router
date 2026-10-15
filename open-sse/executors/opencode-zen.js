@@ -15,7 +15,7 @@ const MAX_SESSION_LENGTH = 256;
 
 const RESPONSES_BASE_URL = "https://opencode.ai/zen/v1/responses";
 const MAX_TOOL_NAME_LEN = 128;
-const OPENCODE_UA = "opencode/1.18.31";
+const OPENCODE_UA = "opencode/latest/2.0.29/cli";
 export const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 // Free-tier fingerprint (mirrors opencode executor, PR #4132): upstream 403s
@@ -23,11 +23,21 @@ const BASE62_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
 const OPENCODE_FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
 
 function hasValidOpencodeVersion(ua) {
-  const m = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
-  if (!m) return false;
-  const major = parseInt(m[1], 10);
-  const minor = parseInt(m[2], 10);
-  return major > 1 || (major === 1 && minor >= 17);
+  // Accept both legacy "opencode/1.18.31" and channel form
+  // "opencode/latest/2.0.29/cli" (official CLI since 2.0, issue #4837/#4861).
+  const legacy = String(ua || "").match(/opencode\/(\d+)\.(\d+)(?:\.(\d+))?/i);
+  if (legacy) {
+    const major = parseInt(legacy[1], 10);
+    const minor = parseInt(legacy[2], 10);
+    return major > 1 || (major === 1 && minor >= 17);
+  }
+  const channel = String(ua || "").match(/opencode\/[a-z-]+\/(\d+)\.(\d+)(?:\.(\d+))?/i);
+  if (channel) {
+    const major = parseInt(channel[1], 10);
+    const minor = parseInt(channel[2], 10);
+    return major > 1 || (major === 1 && minor >= 17);
+  }
+  return false;
 }
 
 function unstableRandom() {
