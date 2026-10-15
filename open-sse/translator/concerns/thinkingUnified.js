@@ -306,7 +306,12 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       break;
     }
     case "gemini-level": {
-      const level = none ? "minimal" : toGeminiThinkingLevel(eff);
+      let level = none ? "minimal" : toGeminiThinkingLevel(eff);
+      // Model-gated levels (Gemini 4 Argon accepts only low|medium|high) — clamp
+      // to the nearest advertised level instead of leaking an unsupported value.
+      if (supportedLevels?.length && !supportedLevels.includes(level)) {
+        level = level === "minimal" ? "low" : (supportedLevels.includes("high") ? "high" : supportedLevels.at(-1));
+      }
       setGeminiThinking(body, { thinkingLevel: level, includeThoughts: level !== "minimal" });
       ensureGeminiOutputFloor(body, geminiLevelOutputFloor(level), caps);
       break;

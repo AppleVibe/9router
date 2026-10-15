@@ -40,6 +40,8 @@ const CLAUDE_NO_XHIGH = ["none", "low", "medium", "high", "max"];
 
 // Model-name pattern overrides (glob, first match wins) — more precise than format default.
 const PATTERN_THINKING = [
+  // Gemini 4 Argon tunable thinking: low|medium|high only (docs; no minimal/none).
+  { pattern: "*gemini-4-argon*", levels: ["low", "medium", "high"] },
   { pattern: "*claude*4.6*", levels: CLAUDE_NO_XHIGH },
   { pattern: "*claude*4-6*", levels: CLAUDE_NO_XHIGH },
   { provider: "codex", pattern: "*gpt-6*", levels: CODEX_GPT_5_6_LEVELS },
