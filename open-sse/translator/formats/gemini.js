@@ -479,8 +479,36 @@ export function normalizeGeminiContents(contents) {
     const parts = c.parts.filter(p => p && Object.keys(p).length > 0).map(sanitizeFunctionResponsePart);
     if (parts.length === 0) continue;
     const last = out.at(-1);
-    if (last?.role === c.role) last.parts.push(...parts);
-    else out.push({ ...c, parts: [...parts] });
+    if (last?.role === c.role) {
+      // Strict Gemini 4 parsers reject a merged user turn whose LAST part is text
+      // following a functionResponse ("Requests ending with a model turn are not
+      // supported" surfaces when the merged turn is malformed, issue #4802). Put
+      // functionResponses first, plain text after — and when the merged turn mixes
+      // both, split so the text continues in its own user turn.
+      const lastHasFn = last.parts.some(p => p.functionResponse);
+      const nextHasText = parts.some(p => p.text !== undefined && !p.functionResponse);
+      if (lastHasFn && nextHasText) {
+        const fnParts = parts.filter(p => p.functionResponse);
+        const textParts = parts.filter(p => !p.functionResponse);
+        if (fnParts.length) last.parts.push(...fnParts);
+        out.push({ ...c, parts: textParts.length ? textParts : [{ text: "" }] });
+      } else {
+        last.parts.push(...parts);
+      }
+    } else {
+      // Same rejection fires for a single incoming user turn whose parts mix
+      // functionResponse with trailing text (#4802) — split it too.
+      const hasFn = parts.some(p => p.functionResponse);
+      const hasText = parts.some(p => p.text !== undefined && !p.functionResponse);
+      if (hasFn && hasText) {
+        const fnParts = parts.filter(p => p.functionResponse);
+        const textParts = parts.filter(p => !p.functionResponse);
+        out.push({ ...c, parts: fnParts });
+        out.push({ ...c, parts: textParts.length ? textParts : [{ text: "" }] });
+      } else {
+        out.push({ ...c, parts: [...parts] });
+      }
+    }
   }
   if (out.length > 0 && out[0].role !== "user") {
     out.unshift({ role: "user", parts: [{ text: "..." }] });
